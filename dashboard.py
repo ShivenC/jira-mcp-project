@@ -1,144 +1,132 @@
 # dashboard.py
+
 import streamlit as st
-import requests
 import pandas as pd
-import plotly.express as px
-import os
-import openai
+import requests
 from collections import Counter
-import re
 
 # -----------------------------
 # Page Setup
 # -----------------------------
-st.set_page_config(page_title="AI SOC Automation Dashboard", layout="wide")
-st.title("AI-Driven SOC Automation Dashboard (MCP + Copilot Agents)")
+st.set_page_config(
+    page_title="MCP SOC Ticket Dashboard",
+    layout="wide"
+)
 
-st.markdown("""
-This dashboard connects to the MCP Server hosted on AWS EC2.
-It simulates AI Copilot agents that:
-
-1. Executive Summary Agent – summarizes all SOC tickets.
-2. Risk Analysis Agent – flags high-risk tickets.
-3. Mitigation Agent – detects repeated attacker IPs and suggests actions.
-""")
+st.title("MCP SOC Ticket Dashboard")
+st.markdown("Displays SOC tickets from MCP server and performs local analysis.")
 
 # -----------------------------
-# Pull MCP Tickets
+# MCP SERVER URL
 # -----------------------------
 MCP_URL = "http://34.207.86.13:8000/tickets"
 
-try:
-    response = requests.get(MCP_URL)
-    tickets = response.json()
-    df = pd.DataFrame(tickets)
-except Exception as e:
-    st.error(f"Failed to connect to MCP server: {e}")
+# -----------------------------
+# Fetch Tickets
+# -----------------------------
+@st.cache_data(ttl=60)
+def fetch_tickets():
+    try:
+        response = requests.get(MCP_URL)
+        response.raise_for_status()
+        return response.json()
+    except Exception as e:
+        st.error(f"Failed to fetch tickets: {e}")
+        return []
+
+tickets = fetch_tickets()
+
+if not tickets:
+    st.warning("No tickets found or MCP server unreachable.")
     st.stop()
 
-if df.empty:
-    st.warning("No tickets found in MCP.")
-    st.stop()
-
-st.success(f"Loaded {len(df)} tickets from MCP Server")
+df = pd.DataFrame(tickets)
 
 st.subheader("Raw MCP Tickets")
-st.dataframe(df)
+st.dataframe(df, use_container_width=True)
+
+st.write(f"Total Tickets: {len(df)}")
 
 # -----------------------------
-# Basic Metrics
+# Agent 1: Find Repeated Tickets
 # -----------------------------
-st.subheader("Ticket Priority Distribution")
+st.subheader("Agent 1: Repeated Ticket Detection")
 
-priority_counts = df["priority"].value_counts()
-fig = px.bar(
-    x=priority_counts.index,
-    y=priority_counts.values,
-    labels={"x": "Priority", "y": "Count"},
-    title="Tickets by Priority"
-)
-st.plotly_chart(fig, use_container_width=True)
+if "summary" in df.columns:
+    summary_counts = df["summary"].value_counts()
+    repeated = summary_counts[summary_counts > 1]
 
-# -----------------------------
-# Risk Analysis Agent
-# -----------------------------
-st.subheader("Risk Analysis Agent Output")
-
-high_risk = df[
-    (df["priority"].str.lower() == "high") |
-    (df["description"].str.contains("critical|ransomware|breach|malware", case=False, na=False))
-]
-
-st.write(f"High-Risk Tickets Detected: {len(high_risk)}")
-st.dataframe(high_risk)
-
-# -----------------------------
-# Mitigation Agent
-# -----------------------------
-st.subheader("Mitigation Recommendation Agent Output")
-
-# Extract IP addresses from descriptions
-ip_pattern = r"\b(?:[0-9]{1,3}\.){3}[0-9]{1,3}\b"
-all_ips = []
-
-for desc in df["description"].dropna():
-    matches = re.findall(ip_pattern, desc)
-    all_ips.extend(matches)
-
-ip_counts = Counter(all_ips)
-repeated_ips = {ip: count for ip, count in ip_counts.items() if count > 1}
-
-if repeated_ips:
-    st.warning("Repeated Attacker IPs Detected:")
-    st.write(repeated_ips)
-    st.info("Recommended Action: Consider blocking repeated IPs at firewall or WAF level.")
-else:
-    st.success("No repeated attacker IPs detected.")
-
-# -----------------------------
-# Executive Summary Agent (AI)
-# -----------------------------
-st.subheader("Executive Summary Agent (AI Generated)")
-
-if st.button("Generate AI Executive Summary"):
-
-    openai_key = None
-    if "OPENAI_API_KEY" in st.secrets:
-        openai_key = st.secrets["OPENAI_API_KEY"]
-    elif os.getenv("OPENAI_API_KEY"):
-        openai_key = os.getenv("OPENAI_API_KEY")
-
-    if not openai_key:
-        st.warning("No OpenAI API key found.")
+    if not repeated.empty:
+        st.warning("Repeated Ticket Summaries Detected:")
+        for summary, count in repeated.items():
+            st.write(f"- {summary} ({count} times)")
     else:
-        openai.api_key = openai_key
+        st.success("No repeated ticket summaries found.")
+else:
+    st.info("No 'summary' column found in tickets.")
 
-        summary_data = {
-            "total_tickets": len(df),
-            "priority_counts": priority_counts.to_dict(),
-            "high_risk_count": len(high_risk),
-            "repeated_ips": repeated_ips
-        }
+# -----------------------------
+# Agent 2: Recommendation Engine
+# -----------------------------
+st.subheader("Agent 2: Automated Recommendations")
 
-        prompt = f"""
-        You are a SOC executive reporting analyst.
-        Based on this data, write:
-        1 short executive paragraph (3-4 sentences)
-        Then 5 short bullet points with key insights or actions.
+recommendations = []
 
-        Data:
-        {summary_data}
-        """
+if "priority" in df.columns:
+    high_priority_count = df[df["priority"].str.lower() == "high"].shape[0]
+    if high_priority_count > 3:
+        recommendations.append("High volume of HIGH priority tickets. Consider incident escalation review.")
 
-        try:
-            response = openai.chat.completions.create(
-                model="gpt-5-mini",
-                messages=[{"role": "user", "content": prompt}]
-            )
+if "status" in df.columns:
+    in_progress = df[df["status"].str.lower() == "in progress"].shape[0]
+    if in_progress > 5:
+        recommendations.append("Large number of tickets still in progress. Review SOC workload distribution.")
 
-            report = response.choices[0].message.content
-            st.success("Executive Report Generated:")
-            st.markdown(report)
+if not recommendations:
+    recommendations.append("Ticket flow appears stable. Continue monitoring.")
 
-        except Exception as e:
-            st.error(f"AI summary failed: {e}")
+for rec in recommendations:
+    st.info(rec)
+
+# -----------------------------
+# Agent 3: Overall Summary
+# -----------------------------
+st.subheader("Agent 3: Overall Ticket Summary")
+
+priority_distribution = {}
+status_distribution = {}
+
+if "priority" in df.columns:
+    priority_distribution = df["priority"].value_counts().to_dict()
+
+if "status" in df.columns:
+    status_distribution = df["status"].value_counts().to_dict()
+
+st.markdown("### Ticket Priority Distribution")
+st.write(priority_distribution)
+
+st.markdown("### Ticket Status Distribution")
+st.write(status_distribution)
+
+# -----------------------------
+# Architecture Section
+# -----------------------------
+st.markdown("---")
+st.subheader("System Architecture Overview")
+
+st.markdown("""
+This dashboard connects to an MCP server hosted on AWS EC2.
+
+Workflow:
+
+1. Simulated security events generate Jira tickets.
+2. MCP server stores and exposes tickets via API.
+3. Streamlit dashboard retrieves ticket data.
+4. Local analysis agents perform:
+   - Duplicate detection
+   - Recommendations
+   - Ticket summarization
+5. GitHub Copilot Agents (via MCP integration) can also analyze the same MCP server tools inside the repository.
+
+This project demonstrates AI-assisted SOC automation using MCP + Copilot Agents.
+""")
