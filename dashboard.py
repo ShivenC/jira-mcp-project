@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 import plotly.express as px
 import requests
+from agents import AgentRunner
 
 # ===============================
 # PAGE CONFIG
@@ -117,36 +118,29 @@ st.plotly_chart(fig_status, use_container_width=True)
 # ===============================
 st.subheader("🤖 AI Agent Insights")
 
+agent_runner = AgentRunner()
+results = agent_runner.run_all(df)
+
 # Executive Summary Agent
 with st.expander("Executive Summary Agent"):
-    summary = (
-        f"There are currently {len(df)} active SOC tickets. "
-        f"{(df['priority'] == 'High').sum()} are marked as High priority. "
-        f"Most common status: {df['status'].value_counts().idxmax()}."
-    )
-    st.write(summary)
+    st.write(results["summary"])
 
-# Risk Agent
+# Risk Analysis Agent
 with st.expander("Risk Analysis Agent"):
-    high_risk = df[df["priority"] == "High"]
+    high_risk = results["high_risk"]
     if not high_risk.empty:
         st.warning("High-risk tickets detected:")
         st.dataframe(high_risk)
     else:
         st.success("No high-risk tickets detected.")
 
-# Mitigation Agent
+# Mitigation Recommendation Agent
 with st.expander("Mitigation Recommendation Agent"):
-    if "description" in df.columns:
-        repeated_ips = df["description"].str.extract(r'(\\d+\\.\\d+\\.\\d+\\.\\d+)')[0]
-        ip_counts = repeated_ips.value_counts()
-        flagged_ips = ip_counts[ip_counts > 1]
-
-        if not flagged_ips.empty:
-            st.error("Repeated attacker IPs detected:")
-            st.write(flagged_ips)
-            st.info("Recommended Action: Block repeated IP addresses at firewall.")
-        else:
-            st.success("No repeated attacker IPs found.")
+    mitigation = results["mitigation"]
+    flagged_ips = mitigation["flagged_ips"]
+    if flagged_ips is not None:
+        st.error("Repeated attacker IPs detected:")
+        st.write(flagged_ips)
+        st.info(f"Recommended Action: {mitigation['recommendation']}")
     else:
-        st.info("No description field available for IP analysis.")
+        st.success("No repeated attacker IPs found.")
