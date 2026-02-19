@@ -1,152 +1,190 @@
+# dashboard.py
+
 import streamlit as st
 import pandas as pd
-import plotly.express as px
 import requests
+import plotly.express as px
 
-# ===============================
-# PAGE CONFIG
-# ===============================
+# ---------------- PAGE CONFIG ----------------
 st.set_page_config(
-    page_title="SOC Command Center",
-    layout="wide"
+    page_title="SOC AI Operations Center",
+    layout="wide",
+    initial_sidebar_state="expanded"
 )
 
-# ===============================
-# DARK THEME + CUSTOM FONT
-# ===============================
+# ---------------- CUSTOM STYLING ----------------
 st.markdown("""
-    <style>
-    @import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;600&display=swap');
-
-    html, body, [class*="css"] {
-        font-family: 'Space Grotesk', sans-serif;
-        background-color: #0f172a;
-        color: #e2e8f0;
-    }
-
-    .stMetric {
-        background-color: #1e293b;
-        padding: 15px;
-        border-radius: 12px;
-    }
-
-    h1, h2, h3 {
-        color: #38bdf8;
-    }
-
-    .block-container {
-        padding-top: 2rem;
-    }
-    </style>
+<style>
+.main-title {
+    font-size: 40px;
+    font-weight: 700;
+}
+.sub-text {
+    font-size: 18px;
+    color: #6c757d;
+}
+.section-title {
+    font-size: 26px;
+    font-weight: 600;
+    margin-top: 30px;
+}
+</style>
 """, unsafe_allow_html=True)
 
-# ===============================
-# TITLE
-# ===============================
-st.title("🛡 SOC Command Center")
-st.markdown("Real-time analytics from Jira → MCP Server → AI Agents")
+# ---------------- HEADER ----------------
+st.markdown('<div class="main-title">🛡 SOC AI Operations Center</div>', unsafe_allow_html=True)
+st.markdown(
+    '<div class="sub-text">'
+    'This system ingests security tickets from Jira, processes them through an MCP server, '
+    'and applies AI-driven agents to analyze patterns, risk levels, and operational bottlenecks.'
+    '</div>',
+    unsafe_allow_html=True
+)
 
-# ===============================
-# FETCH MCP DATA
-# ===============================
+st.markdown("---")
+
+# ---------------- ARCHITECTURE FLOW ----------------
+st.markdown('<div class="section-title">🔄 System Pipeline</div>', unsafe_allow_html=True)
+
+st.info("""
+Jira (Security Events & SOC Alerts)  
+        ↓  
+MCP Server (Centralized Ticket API Layer)  
+        ↓  
+AI Agents (Pattern Detection, Risk Scoring, Recommendation Engine)  
+        ↓  
+Interactive Dashboard (Visualization & Decision Support)
+""")
+
+st.markdown("""
+**What this means:**
+- Jira captures raw SOC security alerts.
+- The MCP server exposes structured ticket data.
+- AI agents analyze ticket sentences, priorities, and status.
+- The dashboard transforms that analysis into operational intelligence.
+""")
+
+st.markdown("---")
+
+# ---------------- FETCH DATA ----------------
 MCP_URL = "http://34.207.86.13:8000/tickets"
 
-try:
-    response = requests.get(MCP_URL, timeout=5)
-    tickets = response.json()
-    df = pd.DataFrame(tickets)
-except Exception as e:
-    st.error(f"Failed to connect to MCP server: {e}")
+@st.cache_data(ttl=120)
+def get_tickets():
+    try:
+        resp = requests.get(MCP_URL)
+        resp.raise_for_status()
+        return resp.json()
+    except Exception as e:
+        st.error(f"Unable to fetch MCP tickets: {e}")
+        return []
+
+tickets = get_tickets()
+if not tickets:
     st.stop()
 
-if df.empty:
-    st.warning("No tickets found in MCP.")
-    st.stop()
+df = pd.DataFrame(tickets)
 
-# ===============================
-# METRICS
-# ===============================
-st.subheader("📊 Live SOC Metrics")
+# ---------------- KPI METRICS ----------------
+st.markdown('<div class="section-title">📈 Operational Metrics</div>', unsafe_allow_html=True)
 
 col1, col2, col3, col4 = st.columns(4)
 
 col1.metric("Total Tickets", len(df))
-col2.metric("Unique Priorities", df["priority"].nunique())
-col3.metric("High Priority", (df["priority"] == "High").sum())
-col4.metric("Open Tickets", (df["status"] == "In Progress").sum())
+col2.metric("Unique Alert Types", df["summary"].nunique() if "summary" in df.columns else 0)
+col3.metric("High Priority", df[df["priority"].str.lower() == "high"].shape[0] if "priority" in df.columns else 0)
+col4.metric("Open Tickets", df[df["status"].str.lower() != "done"].shape[0] if "status" in df.columns else 0)
 
-# ===============================
-# RAW DATA
-# ===============================
-st.subheader("📋 Active Ticket Feed")
-st.dataframe(df, use_container_width=True)
+st.markdown("---")
 
-# ===============================
-# VISUAL ANALYTICS
-# ===============================
-st.subheader("📈 Operational Intelligence")
+# ---------------- DISTRIBUTIONS ----------------
+st.markdown('<div class="section-title">📊 Ticket Intelligence</div>', unsafe_allow_html=True)
 
-# ---- Priority Distribution ----
-priority_counts = df["priority"].value_counts().reset_index()
-priority_counts.columns = ["priority", "count"]
+colA, colB = st.columns(2)
 
-fig_priority = px.bar(
-    priority_counts,
-    x="priority",
-    y="count",
-    title="Ticket Priority Distribution"
-)
+if "priority" in df.columns:
+    fig_priority = px.pie(df, names="priority", title="Priority Distribution")
+    colA.plotly_chart(fig_priority, use_container_width=True)
 
-st.plotly_chart(fig_priority, use_container_width=True)
-
-# ---- Status Distribution (FIXED ERROR HERE) ----
-status_counts = df["status"].value_counts().reset_index()
-status_counts.columns = ["status", "count"]
-
-fig_status = px.bar(
-    status_counts,
-    x="status",
-    y="count",
-    title="Ticket Status Distribution"
-)
-
-st.plotly_chart(fig_status, use_container_width=True)
-
-# ===============================
-# AGENT SIMULATION OUTPUT
-# ===============================
-st.subheader("🤖 AI Agent Insights")
-
-# Executive Summary Agent
-with st.expander("Executive Summary Agent"):
-    summary = (
-        f"There are currently {len(df)} active SOC tickets. "
-        f"{(df['priority'] == 'High').sum()} are marked as High priority. "
-        f"Most common status: {df['status'].value_counts().idxmax()}."
+if "status" in df.columns:
+    status_counts = df["status"].value_counts().reset_index()
+    fig_status = px.bar(
+        status_counts,
+        x="index",
+        y="status",
+        labels={"index": "Status", "status": "Count"},
+        title="Status Distribution"
     )
-    st.write(summary)
+    colB.plotly_chart(fig_status, use_container_width=True)
 
-# Risk Agent
-with st.expander("Risk Analysis Agent"):
-    high_risk = df[df["priority"] == "High"]
+st.markdown("---")
+
+# ---------------- AI PATTERN AGENT ----------------
+st.markdown('<div class="section-title">🤖 AI Pattern Analysis Agent</div>', unsafe_allow_html=True)
+
+st.write("""
+This agent analyzes ticket summaries at the sentence level to detect repetition,
+recurring incidents, or similar alert behavior.
+""")
+
+if "summary" in df.columns:
+    summary_counts = df["summary"].value_counts()
+    repeated = summary_counts[summary_counts > 1]
+
+    if repeated.empty:
+        st.success("No repeated alert sentences detected.")
+    else:
+        st.warning("Repeated Alert Patterns:")
+        for summary, count in repeated.items():
+            st.write(f"• '{summary}' appears {count} times")
+
+st.markdown("---")
+
+# ---------------- RISK AGENT ----------------
+st.markdown('<div class="section-title">⚠️ AI Risk Prioritization Agent</div>', unsafe_allow_html=True)
+
+st.write("""
+This agent evaluates priority labels and ticket state to determine
+which security incidents may require immediate escalation.
+""")
+
+if "priority" in df.columns:
+    high_risk = df[df["priority"].str.lower().isin(["high", "critical"])]
+
+    st.metric("High/Critical Risk Tickets", len(high_risk))
+
     if not high_risk.empty:
-        st.warning("High-risk tickets detected:")
         st.dataframe(high_risk)
     else:
-        st.success("No high-risk tickets detected.")
+        st.success("No critical risk exposure at this time.")
 
-# Mitigation Agent
-with st.expander("Mitigation Recommendation Agent"):
-    if "description" in df.columns:
-        repeated_ips = df["description"].str.extract(r'(\\d+\\.\\d+\\.\\d+\\.\\d+)')[0]
-        ip_counts = repeated_ips.value_counts()
-        flagged_ips = ip_counts[ip_counts > 1]
+st.markdown("---")
 
-        if not flagged_ips.empty:
-            st.error("Repeated attacker IPs detected:")
-            st.write(flagged_ips)
-            st.info("Recommended Action: Block repeated IP addresses at firewall.")
-        else:
-            st.success("No repeated attacker IPs found.")
-    else:
-        st.info("No description field available for IP analysis.")
+# ---------------- MITIGATION AGENT ----------------
+st.markdown('<div class="section-title">🛠 AI Mitigation Recommendation Engine</div>', unsafe_allow_html=True)
+
+st.write("""
+Based on workload signals and risk density, this agent suggests operational adjustments.
+""")
+
+suggestions = []
+
+if "priority" in df.columns:
+    if df[df["priority"].str.lower() == "high"].shape[0] > 5:
+        suggestions.append("High-priority backlog detected — consider reallocating analysts.")
+
+if "status" in df.columns:
+    if df[df["status"].str.lower() == "in progress"].shape[0] > 4:
+        suggestions.append("Multiple tickets are stalled in-progress — investigate bottlenecks.")
+
+if not suggestions:
+    suggestions.append("No immediate mitigation actions recommended.")
+
+for s in suggestions:
+    st.info(s)
+
+st.markdown("---")
+
+# ---------------- RAW DATA ----------------
+with st.expander("📋 View Raw MCP Ticket Data"):
+    st.dataframe(df)
