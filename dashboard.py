@@ -3,130 +3,159 @@
 import streamlit as st
 import pandas as pd
 import requests
-from collections import Counter
+import plotly.express as px
 
-# -----------------------------
-# Page Setup
-# -----------------------------
+# ---- Page Setup ----
 st.set_page_config(
-    page_title="MCP SOC Ticket Dashboard",
-    layout="wide"
+    page_title="SOC Ticket Intelligence Dashboard",
+    layout="wide",
+    initial_sidebar_state="expanded"
 )
 
-st.title("MCP SOC Ticket Dashboard")
-st.markdown("Displays SOC tickets from MCP server and performs local analysis.")
+st.title("📊 SOC Ticket Intelligence Dashboard")
+st.markdown("""
+Visual analytics and agent-driven insights from your MCP Server.
+Powered by ticket ingestion from Jira → MCP → Intelligent analysis.
+""")
 
-# -----------------------------
-# MCP SERVER URL
-# -----------------------------
+# ---- Fetch MCP Tickets ----
 MCP_URL = "http://34.207.86.13:8000/tickets"
 
-# -----------------------------
-# Fetch Tickets
-# -----------------------------
-@st.cache_data(ttl=60)
-def fetch_tickets():
+@st.cache_data(ttl=120)
+def get_tickets():
     try:
-        response = requests.get(MCP_URL)
-        response.raise_for_status()
-        return response.json()
+        resp = requests.get(MCP_URL)
+        resp.raise_for_status()
+        return resp.json()
     except Exception as e:
-        st.error(f"Failed to fetch tickets: {e}")
+        st.error(f"Unable to fetch MCP tickets: {e}")
         return []
 
-tickets = fetch_tickets()
-
+tickets = get_tickets()
 if not tickets:
-    st.warning("No tickets found or MCP server unreachable.")
     st.stop()
 
 df = pd.DataFrame(tickets)
 
-st.subheader("Raw MCP Tickets")
-st.dataframe(df, use_container_width=True)
+# ---- KPI SUMMARY ----
+st.markdown("## 📈 Key Ticket Metrics")
 
-st.write(f"Total Tickets: {len(df)}")
+col1, col2, col3, col4 = st.columns(4)
 
-# -----------------------------
-# Agent 1: Find Repeated Tickets
-# -----------------------------
-st.subheader("Agent 1: Repeated Ticket Detection")
+col1.metric("Total Tickets", len(df))
+col2.metric("Unique Ticket Types", df["summary"].nunique() if "summary" in df.columns else 0)
+col3.metric("High Priority Count", df[df["priority"].str.lower() == "high"].shape[0] if "priority" in df.columns else 0)
+col4.metric("Open Tickets", df[df["status"].str.lower() != "done"].shape[0] if "status" in df.columns else 0)
 
-if "summary" in df.columns:
-    summary_counts = df["summary"].value_counts()
-    repeated = summary_counts[summary_counts > 1]
-
-    if not repeated.empty:
-        st.warning("Repeated Ticket Summaries Detected:")
-        for summary, count in repeated.items():
-            st.write(f"- {summary} ({count} times)")
-    else:
-        st.success("No repeated ticket summaries found.")
-else:
-    st.info("No 'summary' column found in tickets.")
-
-# -----------------------------
-# Agent 2: Recommendation Engine
-# -----------------------------
-st.subheader("Agent 2: Automated Recommendations")
-
-recommendations = []
-
-if "priority" in df.columns:
-    high_priority_count = df[df["priority"].str.lower() == "high"].shape[0]
-    if high_priority_count > 3:
-        recommendations.append("High volume of HIGH priority tickets. Consider incident escalation review.")
-
-if "status" in df.columns:
-    in_progress = df[df["status"].str.lower() == "in progress"].shape[0]
-    if in_progress > 5:
-        recommendations.append("Large number of tickets still in progress. Review SOC workload distribution.")
-
-if not recommendations:
-    recommendations.append("Ticket flow appears stable. Continue monitoring.")
-
-for rec in recommendations:
-    st.info(rec)
-
-# -----------------------------
-# Agent 3: Overall Summary
-# -----------------------------
-st.subheader("Agent 3: Overall Ticket Summary")
-
-priority_distribution = {}
-status_distribution = {}
-
-if "priority" in df.columns:
-    priority_distribution = df["priority"].value_counts().to_dict()
-
-if "status" in df.columns:
-    status_distribution = df["status"].value_counts().to_dict()
-
-st.markdown("### Ticket Priority Distribution")
-st.write(priority_distribution)
-
-st.markdown("### Ticket Status Distribution")
-st.write(status_distribution)
-
-# -----------------------------
-# Architecture Section
-# -----------------------------
 st.markdown("---")
-st.subheader("System Architecture Overview")
+
+# ----RAW TICKET TABLE----
+with st.expander("📋 Raw Ticket Data"):
+    st.dataframe(df)
+
+# ---- DISTRIBUTION CHARTS ----
+st.markdown("## 📊 Ticket Distributions")
+
+fig_priority = None
+if "priority" in df.columns:
+    fig_priority = px.pie(
+        df, names="priority",
+        title="Priority Breakdown"
+    )
+
+fig_status = None
+if "status" in df.columns:
+    fig_status = px.bar(
+        df["status"].value_counts().reset_index(),
+        x="index",
+        y="status",
+        labels={"index": "Status", "status": "Count"},
+        title="Ticket Status Distribution"
+    )
+
+colA, colB = st.columns(2)
+if fig_priority:
+    colA.plotly_chart(fig_priority, use_container_width=True)
+if fig_status:
+    colB.plotly_chart(fig_status, use_container_width=True)
+
+st.markdown("---")
+
+# ---- REPEATED PATTERNS AGENT ----
+with st.expander("🔍 Repeated Patterns Agent"):
+    st.write("Detects repeated ticket summaries or repeated characteristics")
+
+    if "summary" in df.columns:
+        summary_counts = df["summary"].value_counts()
+        repeated = summary_counts[summary_counts > 1]
+
+        if repeated.empty:
+            st.info("No repeated ticket summaries found.")
+        else:
+            for summary, count in repeated.items():
+                st.warning(f"• **{summary}** appears {count} times")
+    else:
+        st.text("No 'summary' field available for pattern detection.")
+
+# ---- RISK ANALYSIS AGENT ----
+with st.expander("⚠️ Risk Analysis Agent"):
+    st.write("Highlights tickets that may need urgent attention")
+
+    if "priority" in df.columns:
+        high_risk = df[df["priority"].str.lower().isin(["high", "critical"])]
+        st.markdown(f"**High/Critical risk tickets:** {len(high_risk)}")
+
+        if not high_risk.empty:
+            st.dataframe(high_risk)
+        else:
+            st.success("No high-risk tickets right now.")
+    else:
+        st.text("Priority field missing — cannot assess risk.")
+
+# ---- MITIGATION RECOMMENDER AGENT ----
+with st.expander("🛠 Mitigation Recommendation Agent"):
+    st.write("Suggests actions based on patterns and risk signals")
+
+    suggestions = []
+
+    # Simple prioritization rule example
+    if "priority" in df.columns:
+        high_count = df[df["priority"].str.lower() == "high"].shape[0]
+        if high_count > 5:
+            suggestions.append("Review SOC workload — >5 high priority tickets.")
+
+    if "status" in df.columns:
+        stuck = df[df["status"].str.lower() == "in progress"].shape[0]
+        if stuck > 4:
+            suggestions.append("Consider redistributing tickets stuck in progress.")
+
+    if not suggestions:
+        suggestions.append("No automated recommendations at this time — monitor ticket flow.")
+
+    for s in suggestions:
+        st.info(f"🔹 {s}")
+
+st.markdown("---")
+
+# ---- ARCHITECTURE NOTES ----
+st.markdown("## 🏗 Architecture")
 
 st.markdown("""
-This dashboard connects to an MCP server hosted on AWS EC2.
+This dashboard presents SOC tickets collected via the Model Context Protocol (MCP) server.
 
-Workflow:
+**Flow:**
+1. Jira captures SOC events.
+2. MCP Server ingests and exposes ticket data.
+3. Dashboard visualizes the ticket stream.
+4. Local agents provide:
+   - Pattern detection
+   - Risk prioritization
+   - Mitigation guidance
 
-1. Simulated security events generate Jira tickets.
-2. MCP server stores and exposes tickets via API.
-3. Streamlit dashboard retrieves ticket data.
-4. Local analysis agents perform:
-   - Duplicate detection
-   - Recommendations
-   - Ticket summarization
-5. GitHub Copilot Agents (via MCP integration) can also analyze the same MCP server tools inside the repository.
-
-This project demonstrates AI-assisted SOC automation using MCP + Copilot Agents.
+**Future:**
+With GitHub Copilot Coding Agent MCP integration,
+the same MCP tools can be autonomously queried for:
+- PR-based reporting
+- Automated insights
+- Scheduled analysis workflows
 """)
